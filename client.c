@@ -43,11 +43,8 @@ void read_inputfile(char *inputfile, void *queue_pointer)
     fs = fopen(inputfile, "r");
     context = NULL, exclude = " \n";
 
-    while (fgets(buff, bufflen, fs) != NULL) {
-        dirpath = strtok_r(buff, exclude, &context);
-        keyword = strtok_r(NULL, exclude, &context);
-        // send request to shared memory, probably in some struct
-    }
+    while (fgets(buff, bufflen, fs) != NULL); 
+        // send request to shared memory, server handles parsing
 }
 
 int main(int argc, char **argv)

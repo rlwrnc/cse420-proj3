@@ -1,3 +1,4 @@
+/* includes */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,7 +9,7 @@
 #include <fcntl.h>
 
 /* declarations */
-void *open_shared_memory(int req_queue_size);
+void *create_shared_memory(int req_queue_size);
 
 /* functions */
 
