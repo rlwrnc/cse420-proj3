@@ -18,12 +18,12 @@ void read_inputfile(char *inputfile, void *queue_pointer);
 
 /* functions */
 
-void *create_shared_memory(int req_queue_size)
+void *open_shared_memory(int req_queue_size)
 {
     int fd;
-    fd = shm_open("req-queue", O_CREAT | O_RDWR, 0666);
-    ftruncate(fd, req_queue_size);
-    void *ptr = mmap(0, req_queue_size , PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    fd = shm_open("req-queue", O_RDWR, 0666);
+    //map memory to *ptr with write permissions
+    void *ptr = mmap(0, req_queue_size , PROT_WRITE, MAP_SHARED, fd, 0);
     
     if (ptr == MAP_FAILED) {
         fprintf(stderr, "client: memory map failed\n");
@@ -31,6 +31,23 @@ void *create_shared_memory(int req_queue_size)
     }
 
     return ptr;
+}
+
+void read_inputfile(char *inputfile, void *queue_pointer)
+{
+    FILE *fs;
+    const int bufflen = MAXDIRPATH + MAXKEYWORD + 2;
+    char buff[bufflen];
+    char *token, *context, *exclude, *dirpath, *keyword;
+
+    fs = fopen(inputfile, "r");
+    context = NULL, exclude = " \n";
+
+    while (fgets(buff, bufflen, fs) != NULL) {
+        dirpath = strtok_r(buff, exclude, &context);
+        keyword = strtok_r(NULL, exclude, &context);
+        // send request to shared memory, probably in some struct
+    }
 }
 
 int main(int argc, char **argv)
@@ -44,6 +61,6 @@ int main(int argc, char **argv)
     int req_queue_size = atoi(argv[1]);
     void *queue_ptr;
 
-    queue_ptr = create_shared_memory(req_queue_size);
-    
+    queue_ptr = open_shared_memory(req_queue_size);
+
 }
