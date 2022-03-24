@@ -13,7 +13,7 @@
 #define MAXKEYWORD 256
 
 
-void *create_shared_memory(int req_queue_size);
+void *open_shared_memory(int req_queue_size);
 void read_inputfile(char *inputfile, void *queue_pointer);
 
 /* functions */

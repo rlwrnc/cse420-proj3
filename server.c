@@ -7,9 +7,11 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <stdint.h>
 
 /* declarations */
 void *create_shared_memory(int req_queue_size);
+void process_requests(void *front_of_queue, int req_queue_size);
 
 /* functions */
 
@@ -21,17 +23,37 @@ void *create_shared_memory(int req_queue_size);
 void *create_shared_memory(int req_queue_size)
 {
     int fd;
-    fd = shm_open("req-queue", O_CREAT | O_RDONLY, 0666);
-    ftruncate(fd, req_queue_size);
+    fd = shm_open("req-queue", O_CREAT | O_RDWR, 0666);
+    ftruncate(fd, req_queue_size + 1);                                      //+1 for count variable
     //map memory to *ptr with read permissions
-    void *ptr = mmap(0, req_queue_size, PROT_READ, MAP_SHARED, fd, 0);
-    
+    void *ptr = mmap(0, req_queue_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+
     if (ptr == MAP_FAILED) {
         fprintf(stderr, "client: memory map failed\n");
         exit(1);
     }
+    
+    sprintf(ptr + req_queue_size + 1, "%d", 0);                             //initialize 'count'
 
     return ptr;
+}
+
+void process_requests(void *front_of_queue, int req_queue_size)
+{
+    int *count;
+    char *request;
+    void *beginning;
+    
+    count = front_of_queue + req_queue_size + 1;
+    beginning = front_of_queue;
+
+    while (*count == 0)
+        ;
+    request = front_of_queue;
+    //do stuff
+    if (front_of_queue++ == count)                                          //no modulo workaround
+        front_of_queue -= req_queue_size;
+    *count--;
 }
 
 int main(int argc, char **argv)
@@ -42,7 +64,7 @@ int main(int argc, char **argv)
     }
 
     int req_queue_size = atoi(argv[1]);
-    void *queue_ptr;
+    void *front_of_queue;
 
-    queue_ptr = create_shared_memory(req_queue_size);
+    front_of_queue = create_shared_memory(req_queue_size);
 }
