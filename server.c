@@ -14,6 +14,8 @@
 #include <fcntl.h>
 #include <stdint.h>
 
+#define MAXDIRPATH 1024
+#define MAXKEYWORD 256
 #define MAXLINESIZE 1024
 #define MAXOUTSIZE 2048
 
@@ -391,45 +393,27 @@ void handle_client_request(char *directory_path, char* keyword, int buffer_size)
    free(bufferInfo);
 }
 
-/*
- *      creates shared memory region for request queue
- *      INPUT: size of request queue
- *      OUTPUT: pointer to shared memory
- */
-void *create_shared_memory(int req_queue_size)
+/**
+ * @brief creates shared memory region for queue
+ *
+ * @param requested size of queue (in # requests)
+ */ 
+void *create_shared_memory(int size)
 {
-    int fd;
-    fd = shm_open("req-queue", O_CREAT | O_RDWR, 0666);
-    ftruncate(fd, req_queue_size + 1);                                      //+1 for count variable
-    //map memory to *ptr with read permissions
-    void *ptr = mmap(0, req_queue_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    int fd, total_size;
+    void *ptr;
 
+    fd = shm_open("queue", O_CREAT | O_RDWR, 0666);
+    total_size = size * (MAXDIRPATH + MAXKEYWORD + 2);                                        //+2 for space and null character
+    ftruncate(fd, total_size + 1 + 2);                                                        //+1 for null character, +2 for overlap flag
+
+    ptr = mmap(0, total_size + 3, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (ptr == MAP_FAILED) {
-        fprintf(stderr, "client: memory map failed\n");
+        fprintf(stderr, "server: memory map failed\n");
         exit(1);
     }
-    
-    sprintf(ptr + req_queue_size + 1, "%d", 0);                             //initialize 'count'
 
     return ptr;
-}
-
-void process_requests(void *front_of_queue, int req_queue_size)
-{
-    int *count;
-    char *request;
-    void *beginning;
-    
-    count = front_of_queue + req_queue_size + 1;
-    beginning = front_of_queue;
-
-    while (*count == 0)
-        ;
-    request = front_of_queue;
-    //do stuff
-    if (front_of_queue++ == count)                                          //no modulo workaround
-        front_of_queue -= req_queue_size;
-    *count--;
 }
 
 int main(int argc, char **argv)
@@ -440,7 +424,5 @@ int main(int argc, char **argv)
     }
 
     int req_queue_size = atoi(argv[1]);
-    void *front_of_queue;
-
-    front_of_queue = create_shared_memory(req_queue_size);
+    int buffersize = atoi(argv[2]);
 }
