@@ -18,6 +18,21 @@
 #define MAXOUTSIZE 2048
 
 /**
+ * @brief contains all data relating to shared memory queue
+ *
+ */
+
+struct Queue {
+    char *buffer;                   //data stored in queue
+    unsigned short *overlap;        //points to number of characters left of overlap (if any)
+    int front;                      //front of queue (data next served)
+    int size;                       //size of queue (not entire shared memory space)
+    sem_t *empty;
+    sem_t *full;
+    sem_t *mutex;
+};
+
+/**
  * @brief object defined for storing a filename, linenumber, and line text in a single variable.
  * 
  */
@@ -375,11 +390,6 @@ void handle_client_request(char *directory_path, char* keyword, int buffer_size)
    free(buffer);
    free(bufferInfo);
 }
-/* declarations */
-void *create_shared_memory(int req_queue_size);
-void process_requests(void *front_of_queue, int req_queue_size);
-
-/* functions */
 
 /*
  *      creates shared memory region for request queue
