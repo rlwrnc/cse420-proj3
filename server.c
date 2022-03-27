@@ -375,7 +375,7 @@ void handle_client_request(char *request, int buffer_size) {
    char *directory_path, *keyword, *context = NULL, *exclude = " ";
 
    directory_path = strtok_r(request, exclude, &context);
-   context = strtok_r(NULL, exclude, &context);
+   keyword = strtok_r(NULL, exclude, &context);
 
    struct List *list = create_list();
    struct Item *buffer;
@@ -433,7 +433,7 @@ struct Queue create_queue(int size)
     q.overlap = (unsigned short *) (q.buffer + total_size + 1);                     //+1 to account for null character
     *q.overlap = 0;
     q.front = 0;
-    q.size = size;
+    q.size = total_size;
     q.empty = sem_open("/empty", O_CREAT, 0666, size);
     q.full = sem_open("/full", O_CREAT, 0666, 0);
     q.mutex = sem_open("/mutex", O_CREAT, 0666, 1);
@@ -497,23 +497,23 @@ void watch_queue(int req_queue_size, int buffersize)
     struct Queue q;
     pid_t pid;
     
+    request_buffer[0] = '\0';
     process_count = 0;
     q = create_queue(req_queue_size);
+    pid = 1;
     
-    do {
+    while (pid != 0 && strcmp(request_buffer, "exit") != 0) {
         dequeue(request_buffer, &q);
         process_count++;
         pid = fork();
-        if (pid < 0) {
-            fprintf(stderr, "server: process fork failed\n");
-            exit(1);
-        } else if (pid == 0) {
-            handle_client_request(request_buffer, buffersize);
-            break;
-        }
-    } while (strcmp(request_buffer, "exit") != 0);
-
-    if (pid != 0) {
+    }
+    
+    if (pid < 0) {
+        fprintf(stderr, "server: process fork failed\n");
+        exit(1);
+    } else if (pid == 0) {
+        handle_client_request(request_buffer, buffersize);
+    } else if (pid != 0) {
         for (int i = 0; i < process_count; i++)
             wait(NULL);
         unlink_queue(&q);
