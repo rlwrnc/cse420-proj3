@@ -23,7 +23,6 @@
  * @brief contains all data relating to shared memory queue
  *
  */
-
 struct Queue {
     char *buffer;                   //data stored in queue
     unsigned short *overlap;        //points to number of characters left of overlap (if any)
@@ -396,7 +395,7 @@ void handle_client_request(char *directory_path, char* keyword, int buffer_size)
 /**
  * @brief creates shared memory region for queue
  *
- * @param size - size of queue (in # requests)
+ * @param size - size of queue (in bytes)
  */ 
 void *create_shared_memory(int size)
 {
