@@ -225,7 +225,7 @@ void *retrieve_keyword(void* ThreadArgs)
    char *saveptr = filebuffer;
    int currentline = 0; //may need to change if line numbers do not start at 0
 
-   while(fgets(filebuffer, 1025, fileptr)) {
+   while(fgets(filebuffer, 1024, fileptr)) {
        token = strtok_r(filebuffer, delim, &saveptr);
        while(token != NULL) {
            if(strcmp(token, ((struct ThreadArgs *)ThreadArgs)->keyword) == 0) {
@@ -368,11 +368,14 @@ void search_directory(char* directory, DIR *dir, struct dirent *dirent, char* ke
 /**
  * @brief function used right after process creation to begin handling the client request
  * 
- * @param directory_path - directory path given by the client
- * @param keyword - keyword given by the client
+ * @param request - request from client; contains directory_path and keyword delimited by space
  * @param buffer_size - buffer size defined by the client.
  */
-void handle_client_request(char *directory_path, char* keyword, int buffer_size) {
+void handle_client_request(char *request, int buffer_size) {
+   char *directory_path, *keyword, *context = NULL, *exclude = " ";
+
+   directory_path = strtok_r(request, exclude, &context);
+   context = strtok_r(NULL, exclude, &context);
 
    struct List *list = create_list();
    struct Item *buffer;
@@ -481,6 +484,42 @@ void dequeue(char *request_buffer, struct Queue *q)
     q->front = (q->front + reqlen) % q->size;
 }
 
+/**
+ * @brief forks search process for each incoming queue request
+ *
+ * @param req_queue_size - size of request queue
+ * @param buffersize - size of shared thread buffer
+ */
+void watch_queue(int req_queue_size, int buffersize)
+{
+    int process_count;
+    char request_buffer[MAXDIRPATH + MAXKEYWORD + 2];
+    struct Queue q;
+    pid_t pid;
+    
+    process_count = 0;
+    q = create_queue(req_queue_size);
+    
+    do {
+        dequeue(request_buffer, &q);
+        process_count++;
+        pid = fork();
+        if (pid < 0) {
+            fprintf(stderr, "server: process fork failed\n");
+            exit(1);
+        } else if (pid == 0) {
+            handle_client_request(request_buffer, buffersize);
+            break;
+        }
+    } while (strcmp(request_buffer, "exit") != 0);
+
+    if (pid != 0) {
+        for (int i = 0; i < process_count; i++)
+            wait(NULL);
+        unlink_queue(&q);
+    }
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 3) {
@@ -490,4 +529,6 @@ int main(int argc, char **argv)
 
     int req_queue_size = atoi(argv[1]);
     int buffersize = atoi(argv[2]);
+    watch_queue(req_queue_size, buffersize);
+    return 0;
 }
