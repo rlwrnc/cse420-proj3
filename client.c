@@ -115,18 +115,24 @@ void enqueue(char *request, struct Queue *q)
     q->back = (q->back + reqlen) % q->size;
 }
 
-void read_inputfile(char *inputfile, void *queue_pointer)
+/**
+ * @brief reads file provided by command line and sends contents to server
+ *
+ * @param inputfile - absolute path of the input file to be read
+ * @param request_queue - reference to request_queue
+ */
+void read_inputfile(char *inputfile, struct Queue *request_queue)
 {
     FILE *fs;
     const int bufflen = MAXDIRPATH + MAXKEYWORD + 2;
-    char buff[bufflen];
-    char *token, *context, *exclude, *dirpath, *keyword;
+    char request[bufflen];
+    char *context, *exclude;
 
     fs = fopen(inputfile, "r");
-    context = NULL, exclude = " \n";
+    context = NULL, exclude = "\n";
 
-    while (fgets(buff, bufflen, fs) != NULL); 
-        // send request to shared memory, server handles parsing
+    while (fgets(request, bufflen, fs) != NULL) 
+        enqueue(strtok_r(request, exclude, &context), request_queue);
 }
 
 int main(int argc, char **argv)
@@ -138,8 +144,8 @@ int main(int argc, char **argv)
     
     char *inputfile = argv[2];
     int req_queue_size = atoi(argv[1]);
-    void *queue_ptr;
-
-    queue_ptr = open_shared_memory(req_queue_size);
-
+    struct Queue request_queue = open_queue(req_queue_size);
+    read_inputfile(inputfile, &request_queue);
+    close_queue(&request_queue);
+    return 0;
 }
