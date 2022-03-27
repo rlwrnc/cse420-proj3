@@ -396,24 +396,90 @@ void handle_client_request(char *directory_path, char* keyword, int buffer_size)
 /**
  * @brief creates shared memory region for queue
  *
- * @param requested size of queue (in # requests)
+ * @param size - size of queue (in # requests)
  */ 
 void *create_shared_memory(int size)
 {
-    int fd, total_size;
+    int fd;
     void *ptr;
 
     fd = shm_open("queue", O_CREAT | O_RDWR, 0666);
-    total_size = size * (MAXDIRPATH + MAXKEYWORD + 2);                                        //+2 for space and null character
-    ftruncate(fd, total_size + 1 + 2);                                                        //+1 for null character, +2 for overlap flag
+    ftruncate(fd, size + 1 + 2);                                                    //+1 for null character, +2 for overlap flag
 
-    ptr = mmap(0, total_size + 3, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    ptr = mmap(0, size + 3, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (ptr == MAP_FAILED) {
         fprintf(stderr, "server: memory map failed\n");
         exit(1);
     }
 
     return ptr;
+}
+
+/**
+ * @brief creates a queue on shared memory
+ *
+ * @param size - size of queue (in # requests)
+ */
+struct Queue create_queue(int size)
+{
+    int total_size, line_size;
+    struct Queue q;
+    
+    line_size = MAXDIRPATH + 1 + MAXKEYWORD + 1;                                    //+1 for space, +1 for null character
+    total_size = size * line_size;
+    q.buffer = (char *) create_shared_memory(total_size);
+    q.overlap = (unsigned short *) (q.buffer + total_size + 1);                     //+1 to account for null character
+    *q.overlap = 0;
+    q.front = 0;
+    q.size = size;
+    q.empty = sem_open("/empty", O_CREAT, 0666, size);
+    q.full = sem_open("/full", O_CREAT, 0666, 0);
+    q.mutex = sem_open("/mutex", O_CREAT, 0666, 1);
+    return q;
+}
+
+/**
+ * @brief unlinks all shared memory used for queue
+ *
+ * @param queue to be unlinked
+ */
+void unlink_queue(struct Queue *q)
+{
+    shm_unlink("queue");
+    sem_close(q->empty);
+    sem_unlink("/empty");
+    sem_close(q->full);
+    sem_unlink("/full");
+    sem_close(q->mutex);
+    sem_unlink("/mutex");
+}
+
+/**
+ * @brief dequeues request string on shared memory queue
+ *
+ * @param request_buffer - holds dequeued request string
+ * @param q - reference to queue
+ */
+void dequeue(char *request_buffer, struct Queue *q)
+{
+    unsigned short reqlen;
+
+    sem_wait(q->full);
+    sem_wait(q->mutex);
+
+    if (*q->overlap != 0 || q->front != q->size - *q->overlap) 
+        strcpy(request_buffer, &q->buffer[q->front]);
+    else {
+        strncpy(request_buffer, &q->buffer[q->front], *q->overlap);
+        strcpy(&request_buffer[*q->overlap], q->buffer);
+        *q->overlap = 0;
+    }
+    
+    sem_post(q->mutex);
+    sem_post(q->empty);
+
+    reqlen = strlen(request_buffer) + 1;
+    q->front = (q->front + reqlen) % q->size;
 }
 
 int main(int argc, char **argv)
