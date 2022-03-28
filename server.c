@@ -66,6 +66,7 @@ struct ThreadArgs {
     struct Item *buffer;
     struct ThreadBufferInfo bufferInfo;
     struct List *list;
+    int filestream;
 };
 
 /**
@@ -165,7 +166,7 @@ void destroy_list(struct List *list) {
  * @param list 
  * @return struct ThreadArgs* 
  */
-struct ThreadArgs *create_thread_args(char *filename, char *keyword, struct Item *buffer, struct ThreadBufferInfo bufferInfo, struct List *list)
+struct ThreadArgs *create_thread_args(char *filename, int filestream, char *keyword, struct Item *buffer, struct ThreadBufferInfo bufferInfo, struct List *list)
 {
     struct ThreadArgs *threadargs = malloc(sizeof(struct ThreadArgs));
     if (threadargs == NULL) {
@@ -173,6 +174,7 @@ struct ThreadArgs *create_thread_args(char *filename, char *keyword, struct Item
         exit(-1);
     }
     threadargs->filename = strdup(filename);
+    threadargs->filestream = filestream;
     threadargs->keyword = strdup(keyword);
     threadargs->buffer = buffer;
     threadargs->bufferInfo = bufferInfo;
@@ -208,6 +210,7 @@ struct Item *buffer_get(struct ThreadBufferInfo bufferInfo, struct Item *buffer)
     if(bufferInfo.use == bufferInfo.maxBufferSize) {
         bufferInfo.use = 0;
     }
+    printf("item retrieved: %s:%d:%s", tmp->filename, tmp->linenumber, tmp->line);
     return tmp;
 }
 /**
@@ -218,16 +221,20 @@ struct Item *buffer_get(struct ThreadBufferInfo bufferInfo, struct Item *buffer)
  */
 void *retrieve_keyword(void* ThreadArgs)
 {
+   //printf("worker thread created\n");
+   printf("file to handle: %s\n", ((struct ThreadArgs *)ThreadArgs)->filename);
    FILE *fileptr = fopen(((struct ThreadArgs *)ThreadArgs)->filename, "r");
    char filebuffer[MAXLINESIZE];
    char delim[] = " \t\n";
    char *token;
    char *saveptr = filebuffer;
    int currentline = 0; //may need to change if line numbers do not start at 0
-
-   while(fgets(filebuffer, 1024, fileptr)) {
+   while(fgets(filebuffer, 1024, fileptr) != NULL) {
+       printf("still workin\n");
        token = strtok_r(filebuffer, delim, &saveptr);
+       printf("token is: %s ", token);
        while(token != NULL) {
+           printf("looking for keyword: %s\n", ((struct ThreadArgs *)ThreadArgs)->keyword);
            if(strcmp(token, ((struct ThreadArgs *)ThreadArgs)->keyword) == 0) {
                //create item and store the line information
                struct Item item;
@@ -243,11 +250,12 @@ void *retrieve_keyword(void* ThreadArgs)
                //buffer stuff above -- EXIT CRITICAL SECTION
                //increment currentline and move to next line
                currentline++;
-               continue; //breaks out of inner while loop and gets next line to be parsed.
+               printf("loopy\n");
+               break; //breaks out of inner while loop and gets next line to be parsed.
            }
            else {
-               strtok_r(NULL, delim, &saveptr);
-                //keep searching tokens
+                token = strtok_r(NULL, delim, &saveptr);
+                printf("token is: %s ", token);
            }
        }
    }
@@ -278,16 +286,19 @@ void *retrieve_keyword(void* ThreadArgs)
  */
 void *print_buffer(void* ThreadArgs) //aka CONSUMER
 {
-    char *outputfilename = "output.txt";
     struct flock fl = {F_WRLCK, SEEK_END, 0, MAXOUTSIZE, 0}; //might need to alter the 5th arg for multiple processes.
-    int filestream = open(outputfilename, O_WRONLY);
+    //int filestream = open(outputfilename, O_CREAT | O_APPEND | O_RDWR, 0666);
+    //printf("file opened\n");
     struct Item *ptr = malloc(sizeof(struct Item));
     ptr->linenumber = 0;
+    printf("about to start to grab something from the buffer: thread count is %d\n", ((struct ThreadArgs *)ThreadArgs)->list->threadcount);
     while(((struct ThreadArgs *)ThreadArgs)->list->threadcount != 0) {
         //protects shared buffer between threads.
+        printf("about to grab something from the buffer\n");
         sem_wait(&((struct ThreadArgs *)ThreadArgs)->bufferInfo.full);
         sem_wait(&((struct ThreadArgs *)ThreadArgs)->bufferInfo.mutex);
         ptr = buffer_get(((struct ThreadArgs*)ThreadArgs)->bufferInfo, ((struct ThreadArgs *)ThreadArgs)->buffer);
+        printf("item retrieved from buffer: %s:%d:%s", ptr->filename, ptr->linenumber, ptr->line);
         sem_post(&((struct ThreadArgs *)ThreadArgs)->bufferInfo.mutex);
         sem_post(&((struct ThreadArgs *)ThreadArgs)->bufferInfo.empty);
         if(ptr->linenumber != -1) {
@@ -300,24 +311,29 @@ void *print_buffer(void* ThreadArgs) //aka CONSUMER
             strcat(linebuff, linenumber);
             strcat(linebuff, ":");
             strcat(linebuff, ptr->line);
+            printf("%s", linebuff);
             //try to lock the file
             fl.l_type = F_WRLCK;
-            fcntl(filestream, F_SETLKW, &fl);
+            printf("attemping to access file\n");
+            fcntl(((struct ThreadArgs *)ThreadArgs)->filestream, F_SETLKW, &fl);
             //if file is currently locked, thread will wait.
-            write(filestream, linebuff, MAXOUTSIZE);
+            write(((struct ThreadArgs *)ThreadArgs)->filestream, linebuff, MAXOUTSIZE);
+            //fprintf(filestream, "token is: %s:%d:%s", ptr->filename, ptr->linenumber, ptr->line);
             //release the lock
             fl.l_type = F_UNLCK;
-            fcntl(filestream, F_SETLK, &fl);
+            fcntl(((struct ThreadArgs *)ThreadArgs)->filestream, F_SETLK, &fl);
+            printf("file unlocked\n");
         }
         else {
             ((struct ThreadArgs *)ThreadArgs)->list->threadcount--;
         }
     }
+    printf("closing thread\n");
     free(ptr);
     free(((struct ThreadArgs *)ThreadArgs)->filename);
     free(((struct ThreadArgs *)ThreadArgs)->keyword);
     free((struct ThreadArgs *)ThreadArgs);
-    close(filestream);
+    close(((struct ThreadArgs *)ThreadArgs)->filestream);
     pthread_exit(0);
 }
 
@@ -332,36 +348,42 @@ void *print_buffer(void* ThreadArgs) //aka CONSUMER
  * @param bufferInfo - information about the shared buffer
  * @param list - the linked-list of thread id's
  */
-void search_directory(char* directory, DIR *dir, struct dirent *dirent, char* keyword, struct Item *buffer, struct ThreadBufferInfo bufferInfo, struct List *list)
+void search_directory(char* directory, DIR *dir, struct dirent *dirent, char* keyword, struct Item *buffer, struct ThreadBufferInfo bufferInfo, struct List *list, int filestream)
 {
     while((dirent = readdir(dir)) != NULL) {
-        //create a string with directory path to input to stat()
-        char dirpath[strlen(directory) + strlen(dirent->d_name)];
-        strcpy(dirpath, directory);
-        strcat(dirpath, "/");
-        strcat(dirpath, dirent->d_name);
-        //get stat output for directory
         struct stat statbuf;
-        stat(dirpath, &statbuf);
+        //create a string with directory path to input to stat()
+        char filepath[strlen(directory) + strlen(dirent->d_name)];
+        strcpy(filepath, directory);
+        strcat(filepath, "/");
+        strcat(filepath, dirent->d_name);
+        //get stat output for directory
+        stat(filepath, &statbuf);
 
         if(dirent->d_name[0] != '.') {
+            //printf("file found: %s\n", filepath);
             if(S_ISREG(statbuf.st_mode)) {
+                //printf("actually handling: %s\n", filepath);
                 //creating file-search threads
                 struct Node *newNode = create_node();
-                struct ThreadArgs *threadargs = create_thread_args(directory, keyword, buffer, bufferInfo, list);
+                //printf("file to search: %s\n", filepath);
+                struct ThreadArgs *threadargs = create_thread_args(filepath, filestream, keyword, buffer, bufferInfo, list);
+                //printf("thread args created\n");
                 pthread_attr_init(&newNode->attr);
                 pthread_attr_setdetachstate(&newNode->attr, PTHREAD_CREATE_JOINABLE);
                 pthread_create(&newNode->tid, &newNode->attr, retrieve_keyword, (void *) threadargs);
+                printf("worker thread created\n");
                 insert_tail(newNode, list);
             }
         }
     }
     //creating printer thread
-    struct Node *printerNode = create_node();
-    struct ThreadArgs *threadargs = create_thread_args(directory, keyword, buffer, bufferInfo, list);
-    pthread_attr_init(&printerNode->attr);
-    pthread_attr_setdetachstate(&printerNode->attr, PTHREAD_CREATE_JOINABLE);
-    pthread_create(&printerNode->tid, &printerNode->attr, print_buffer, (void *) threadargs);
+    //struct Node *printerNode = create_node();
+    //struct ThreadArgs *threadargs = create_thread_args("dummy", filestream, keyword, buffer, bufferInfo, list);
+    //pthread_attr_init(&printerNode->attr);
+    //pthread_attr_setdetachstate(&printerNode->attr, PTHREAD_CREATE_JOINABLE);
+    //pthread_create(&printerNode->tid, &printerNode->attr, print_buffer, (void *) threadargs);
+    //printf("printer thread created\n");
     closedir(dir);
 }
 
@@ -372,10 +394,13 @@ void search_directory(char* directory, DIR *dir, struct dirent *dirent, char* ke
  * @param buffer_size - buffer size defined by the client.
  */
 void handle_client_request(char *request, int buffer_size) {
+   printf("handling client request with directory: %s, and buffer size %d\n", request, buffer_size);
    char *directory_path, *keyword, *context = NULL, *exclude = " ";
 
    directory_path = strtok_r(request, exclude, &context);
    keyword = strtok_r(NULL, exclude, &context);
+
+   int filestream = open("output.txt", O_CREAT | O_APPEND | O_RDWR, 0666);
 
    struct List *list = create_list();
    struct Item *buffer;
@@ -389,7 +414,7 @@ void handle_client_request(char *request, int buffer_size) {
    DIR *dir = NULL;
    struct dirent *dirent = NULL;
    dir = opendir(directory_path);
-   search_directory(directory_path, dir, dirent, keyword, buffer, *bufferInfo, list);
+   search_directory(directory_path, dir, dirent, keyword, buffer, *bufferInfo, list, filestream);
 
    free(buffer);
    free(bufferInfo);
@@ -506,12 +531,13 @@ void watch_queue(int req_queue_size, int buffersize)
         dequeue(request_buffer, &q);
         process_count++;
         pid = fork();
+        //printf("process created with pid: %d\n", pid);
     }
     
     if (pid < 0) {
         fprintf(stderr, "server: process fork failed\n");
         exit(1);
-    } else if (pid == 0) {
+    } else if (pid == 0 ) {
         handle_client_request(request_buffer, buffersize);
     } else if (pid != 0) {
         for (int i = 0; i < process_count; i++)
