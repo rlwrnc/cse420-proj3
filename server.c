@@ -50,19 +50,6 @@ struct Item {
 };
 
 /**
- * @brief contains all information about the shared buffer between threads, including semaphores, indicies, and size.
- * 
- */
-struct ThreadBufferInfo {
-    // int use;
-    // int fill;
-    int maxBufferSize;
-    // sem_t empty;
-    // sem_t full;
-    // sem_t mutex;
-};
-
-/**
  * @brief passed when a thread is created, has all the necessary information for worker & printer threads.
  * 
  */
@@ -71,7 +58,7 @@ struct ThreadArgs {
     char *filename;
     char *keyword;
     struct Item *buffer;
-    struct ThreadBufferInfo bufferInfo;
+    int threadbuffersize;
     struct List *list;
     int filestream;
 };
@@ -169,11 +156,11 @@ void destroy_list(struct List *list) {
  * @param filename 
  * @param keyword 
  * @param buffer 
- * @param bufferInfo 
+ * @param threadbuffersize
  * @param list 
  * @return struct ThreadArgs* 
  */
-struct ThreadArgs *create_thread_args(char *filepath, char *filename, int filestream, char *keyword, struct Item *buffer, struct ThreadBufferInfo bufferInfo, struct List *list)
+struct ThreadArgs *create_thread_args(char *filepath, char *filename, int filestream, char *keyword, struct Item *buffer, int threadbuffersize, struct List *list)
 {
     struct ThreadArgs *threadargs = malloc(sizeof(struct ThreadArgs));
     if (threadargs == NULL) {
@@ -185,7 +172,7 @@ struct ThreadArgs *create_thread_args(char *filepath, char *filename, int filest
     threadargs->filestream = filestream;
     threadargs->keyword = strdup(keyword);
     threadargs->buffer = buffer;
-    threadargs->bufferInfo = bufferInfo;
+    threadargs->threadbuffersize = threadbuffersize;
     threadargs->list = list;
     return threadargs;
 }
@@ -193,14 +180,14 @@ struct ThreadArgs *create_thread_args(char *filepath, char *filename, int filest
  * @brief adds an Item to the shared buffer
  * 
  * @param item - the item to be added to the buffer
- * @param bufferInfo - information about the buffer including the array indices.
+ * @param threadbuffersize - information about the buffer size
  * @param buffer 
  */
-void buffer_fill(struct Item *item, struct ThreadBufferInfo bufferInfo, struct Item *buffer)
+void buffer_fill(struct Item item, int threadbuffersize, struct Item *buffer)
 {
-    buffer[buffer_filler] = *item;
+    buffer[buffer_filler] = item;
     buffer_filler++;
-    if (buffer_filler == bufferInfo.maxBufferSize) {
+    if (buffer_filler == threadbuffersize) {
         buffer_filler = 0;
     }
 }
@@ -211,11 +198,11 @@ void buffer_fill(struct Item *item, struct ThreadBufferInfo bufferInfo, struct I
  * @param buffer the shared buffer between threads
  * @return struct Item*
  */
-struct Item *buffer_get(struct ThreadBufferInfo bufferInfo, struct Item *buffer)
+struct Item buffer_get(int threadbuffersize, struct Item *buffer)
 {
-    struct Item *tmp = &buffer[buffer_use];
+    struct Item tmp = buffer[buffer_use];
     buffer_use++;
-    if(buffer_use == bufferInfo.maxBufferSize) {
+    if(buffer_use == threadbuffersize) {
         buffer_use = 0;
     }
     return tmp;
@@ -240,17 +227,17 @@ void *retrieve_keyword(void* ThreadArgs)
         token = strtok_r(filebuffer, delim, &saveptr);
         while(token != NULL) {
             if(strcmp(token, ((struct ThreadArgs *)ThreadArgs)->keyword) == 0) {
-                struct Item *item = malloc(sizeof(struct Item));
+                struct Item item;
                 for(int i = lastsavedline; i < currentline; i++) {
-                    fgets(item->line, 1024, lineptr);
+                    fgets(item.line, 1024, lineptr);
                 }
                 lastsavedline = currentline;
-                item->filename = ((struct ThreadArgs *)ThreadArgs)->filename;
-                item->linenumber = currentline;
+                item.filename = ((struct ThreadArgs *)ThreadArgs)->filename;
+                item.linenumber = currentline;
 
                 sem_wait(&buffer_empty);
                 sem_wait(&buffer_mutex);
-                buffer_fill(item, ((struct ThreadArgs *)ThreadArgs)->bufferInfo, ((struct ThreadArgs *)ThreadArgs)->buffer);
+                buffer_fill(item, ((struct ThreadArgs *)ThreadArgs)->threadbuffersize, ((struct ThreadArgs *)ThreadArgs)->buffer);
                 sem_post(&buffer_mutex);
                 sem_post(&buffer_full);
                 break;
@@ -261,11 +248,11 @@ void *retrieve_keyword(void* ThreadArgs)
         }
    }
 
-    struct Item *dummyItem = malloc(sizeof(struct Item));
-    dummyItem->linenumber = -1;
+    struct Item dummyItem;
+    dummyItem.linenumber = -1;
     sem_wait(&buffer_empty);
     sem_wait(&buffer_mutex);
-    buffer_fill(dummyItem, ((struct ThreadArgs *)ThreadArgs)->bufferInfo, ((struct ThreadArgs *)ThreadArgs)->buffer);
+    buffer_fill(dummyItem, ((struct ThreadArgs *)ThreadArgs)->threadbuffersize, ((struct ThreadArgs *)ThreadArgs)->buffer);
     sem_post(&buffer_mutex);
     sem_post(&buffer_full);
 
@@ -281,28 +268,28 @@ void *retrieve_keyword(void* ThreadArgs)
  * @param ThreadArgs - contains all necessary information for the printer thread. 
  * @return void* 
  */
-void *print_buffer(void* ThreadArgs) //aka CONSUMER
+void *print_buffer(void* ThreadArgs)
 {
-    struct flock fl = {F_WRLCK, SEEK_END, 0, 0, 0}; //might need to alter the 5th arg for multiple processes.
-    struct Item *ptr = malloc(sizeof(struct Item));
-    ptr->linenumber = 0;
+    struct flock fl = {F_WRLCK, SEEK_END, 0, 0, 0};
+    struct Item ptr;
+    ptr.linenumber = 0;
     while(((struct ThreadArgs *)ThreadArgs)->list->threadcount != 1) {
         sem_wait(&buffer_full);
         sem_wait(&buffer_mutex);
-        ptr = buffer_get(((struct ThreadArgs*)ThreadArgs)->bufferInfo, ((struct ThreadArgs *)ThreadArgs)->buffer);
+        ptr = buffer_get(((struct ThreadArgs*)ThreadArgs)->threadbuffersize, ((struct ThreadArgs *)ThreadArgs)->buffer);
         sem_post(&buffer_mutex);
         sem_post(&buffer_empty);
 
-        if(ptr->linenumber != -1 && ptr->filename != NULL) {
+        if(ptr.linenumber != -1 && ptr.filename != NULL) {
             char *linebuff = malloc(MAXOUTSIZE);
             char linenumber[5];
             strcpy(linebuff, "");
-            strcat(linebuff, ptr->filename);
+            strcat(linebuff, ptr.filename);
             strcat(linebuff, ":");
-            sprintf(linenumber, "%d", ptr->linenumber);
+            sprintf(linenumber, "%d", ptr.linenumber);
             strcat(linebuff, linenumber);
             strcat(linebuff, ":");
-            strcat(linebuff, ptr->line);
+            strcat(linebuff, ptr.line);
 
             fl.l_type = F_SETLKW;
             fl.l_pid = getpid();
@@ -332,10 +319,10 @@ void *print_buffer(void* ThreadArgs) //aka CONSUMER
  * @param dirent - struct used for directory operations
  * @param keyword - the requested keyword from the process
  * @param buffer - the shared buffer between threads
- * @param bufferInfo - information about the shared buffer
+ * @param threadbuffersize - the size of the thread buffer
  * @param list - the linked-list of thread id's
  */
-void search_directory(char* directory, DIR *dir, struct dirent *dirent, char* keyword, struct Item *buffer, struct ThreadBufferInfo bufferInfo, struct List *list, int filestream)
+void search_directory(char* directory, DIR *dir, struct dirent *dirent, char* keyword, struct Item *buffer, int threadbuffersize, struct List *list, int filestream)
 {
     while((dirent = readdir(dir)) != NULL) {
         struct stat statbuf;
@@ -348,9 +335,8 @@ void search_directory(char* directory, DIR *dir, struct dirent *dirent, char* ke
 
         if(dirent->d_name[0] != '.') {
             if(S_ISREG(statbuf.st_mode)) {
-                //creating file-search threads
                 struct Node *newNode = create_node();
-                struct ThreadArgs *threadargs = create_thread_args(filepath, dirent->d_name ,filestream, keyword, buffer, bufferInfo, list);
+                struct ThreadArgs *threadargs = create_thread_args(filepath, dirent->d_name, filestream, keyword, buffer, threadbuffersize, list);
                 pthread_attr_init(&newNode->attr);
                 pthread_attr_setdetachstate(&newNode->attr, PTHREAD_CREATE_JOINABLE);
                 pthread_create(&newNode->tid, &newNode->attr, retrieve_keyword, (void *) threadargs);
@@ -358,9 +344,8 @@ void search_directory(char* directory, DIR *dir, struct dirent *dirent, char* ke
             }
         }
     }
-    //creating printer thread
     struct Node *printerNode = create_node();
-    struct ThreadArgs *threadargs = create_thread_args("dummy", "dummy", filestream, keyword, buffer, bufferInfo, list);
+    struct ThreadArgs *threadargs = create_thread_args("dummy", "dummy", filestream, keyword, buffer, threadbuffersize, list);
     pthread_attr_init(&printerNode->attr);
     pthread_attr_setdetachstate(&printerNode->attr, PTHREAD_CREATE_JOINABLE);
     pthread_create(&printerNode->tid, &printerNode->attr, print_buffer, (void *) threadargs);
@@ -382,9 +367,8 @@ void handle_client_request(char *request, int buffer_size, int filestream) {
 
    struct List *list = create_list();
    struct Item *buffer;
-   struct ThreadBufferInfo *bufferInfo;
    buffer = malloc(sizeof(struct Item) * buffer_size);
-   bufferInfo = malloc(sizeof(struct ThreadBufferInfo));
+   int threadbuffersize = buffer_size;
    sem_init(&buffer_empty, 0, buffer_size);
    sem_init(&buffer_full, 0, 0);
    sem_init(&buffer_mutex, 0, 1);
@@ -392,12 +376,12 @@ void handle_client_request(char *request, int buffer_size, int filestream) {
    DIR *dir = NULL;
    struct dirent *dirent = NULL;
    dir = opendir(directory_path);
-   search_directory(directory_path, dir, dirent, keyword, buffer, *bufferInfo, list, filestream);
+   search_directory(directory_path, dir, dirent, keyword, buffer, threadbuffersize, list, filestream);
 
    while(list->threadcount != 0) {}
 
+   destroy_list(list);
    free(buffer);
-   free(bufferInfo);
 }
 
 /**
@@ -520,7 +504,6 @@ void watch_queue(int req_queue_size, int buffersize, int filestream)
         exit(1);
     } else if (pid == 0 ) {
         if((strcmp(request_buffer, "") != 0)) {
-            //printf("handling client request with values: %s %d", request_buffer, buffersize);
             handle_client_request(request_buffer, buffersize, filestream);
         }
     } else if (pid != 0) {
