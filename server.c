@@ -81,6 +81,7 @@ struct List {
     struct Node *head;
     struct Node *tail;
     int threadcount;
+    int overallthreadcount;
 };
 
 /**
@@ -113,6 +114,7 @@ struct List *create_list(void) {
     list->head = NULL;
     list->tail = NULL;
     list->threadcount = 0;
+    list->overallthreadcount = 0;
     return list;
 }
 
@@ -127,10 +129,12 @@ void insert_tail(struct Node *node, struct List *list) {
         list->head = node;
         list->tail = node;
         list->threadcount++;
+        list->overallthreadcount++;
     } else {
         list->tail->next = node;
         list->tail = node;
         list->threadcount++;
+        list->overallthreadcount++;
     }
 }
 
@@ -168,7 +172,7 @@ struct ThreadArgs *create_thread_args(char *filepath, char *filename, int filest
         exit(-1);
     }
     threadargs->filepath = strdup(filepath);
-    threadargs->filename = strdup(filename);
+    threadargs->filename = filename;
     threadargs->filestream = filestream;
     threadargs->keyword = strdup(keyword);
     threadargs->buffer = buffer;
@@ -176,6 +180,7 @@ struct ThreadArgs *create_thread_args(char *filepath, char *filename, int filest
     threadargs->list = list;
     return threadargs;
 }
+
 /**
  * @brief adds an Item to the shared buffer
  * 
@@ -191,6 +196,7 @@ void buffer_fill(struct Item item, int threadbuffersize, struct Item *buffer)
         buffer_filler = 0;
     }
 }
+
 /**
  * @brief helper function that returns an Item retrieved from the shared buffer
  * 
@@ -207,6 +213,7 @@ struct Item buffer_get(int threadbuffersize, struct Item *buffer)
     }
     return tmp;
 }
+
 /**
  * @brief Used by worker threads to find keywords in a file and add lines to the shared thread buffer.
  * 
@@ -215,8 +222,10 @@ struct Item buffer_get(int threadbuffersize, struct Item *buffer)
  */
 void *retrieve_keyword(void* ThreadArgs)
 {
-   FILE *fileptr = fopen(((struct ThreadArgs *)ThreadArgs)->filepath, "r");
-   FILE *lineptr = fopen(((struct ThreadArgs *)ThreadArgs)->filepath, "r");
+   struct ThreadArgs *threadargs = (struct ThreadArgs *)ThreadArgs;
+
+   FILE *fileptr = fopen(threadargs->filepath, "r");
+   FILE *lineptr = fopen(threadargs->filepath, "r");
 
    char filebuffer[MAXLINESIZE], delim[] = " \t\n";
    char *token, *saveptr = filebuffer;
@@ -226,18 +235,18 @@ void *retrieve_keyword(void* ThreadArgs)
         currentline++;
         token = strtok_r(filebuffer, delim, &saveptr);
         while(token != NULL) {
-            if(strcmp(token, ((struct ThreadArgs *)ThreadArgs)->keyword) == 0) {
+            if(strcmp(token, threadargs->keyword) == 0) {
                 struct Item item;
                 for(int i = lastsavedline; i < currentline; i++) {
                     fgets(item.line, 1024, lineptr);
                 }
                 lastsavedline = currentline;
-                item.filename = ((struct ThreadArgs *)ThreadArgs)->filename;
+                item.filename = threadargs->filename;
                 item.linenumber = currentline;
 
                 sem_wait(&buffer_empty);
                 sem_wait(&buffer_mutex);
-                buffer_fill(item, ((struct ThreadArgs *)ThreadArgs)->threadbuffersize, ((struct ThreadArgs *)ThreadArgs)->buffer);
+                buffer_fill(item, threadargs->threadbuffersize, threadargs->buffer);
                 sem_post(&buffer_mutex);
                 sem_post(&buffer_full);
                 break;
@@ -252,12 +261,16 @@ void *retrieve_keyword(void* ThreadArgs)
     dummyItem.linenumber = -1;
     sem_wait(&buffer_empty);
     sem_wait(&buffer_mutex);
-    buffer_fill(dummyItem, ((struct ThreadArgs *)ThreadArgs)->threadbuffersize, ((struct ThreadArgs *)ThreadArgs)->buffer);
+    buffer_fill(dummyItem, threadargs->threadbuffersize, threadargs->buffer);
     sem_post(&buffer_mutex);
     sem_post(&buffer_full);
 
     fclose(fileptr);
     fclose(lineptr);
+
+    free(((struct ThreadArgs *)ThreadArgs)->filepath);
+    free(((struct ThreadArgs *)ThreadArgs)->keyword);
+    free((struct ThreadArgs *)ThreadArgs);
     pthread_exit(0);
 }
 
@@ -270,13 +283,15 @@ void *retrieve_keyword(void* ThreadArgs)
  */
 void *print_buffer(void* ThreadArgs)
 {
+    struct ThreadArgs *threadargs = (struct ThreadArgs *)ThreadArgs;
+
     struct flock fl = {F_WRLCK, SEEK_END, 0, 0, 0};
     struct Item ptr;
     ptr.linenumber = 0;
-    while(((struct ThreadArgs *)ThreadArgs)->list->threadcount != 1) {
+    while(threadargs->list->threadcount != 1) {
         sem_wait(&buffer_full);
         sem_wait(&buffer_mutex);
-        ptr = buffer_get(((struct ThreadArgs*)ThreadArgs)->threadbuffersize, ((struct ThreadArgs *)ThreadArgs)->buffer);
+        ptr = buffer_get(threadargs->threadbuffersize, threadargs->buffer);
         sem_post(&buffer_mutex);
         sem_post(&buffer_empty);
 
@@ -293,18 +308,17 @@ void *print_buffer(void* ThreadArgs)
 
             fl.l_type = F_SETLKW;
             fl.l_pid = getpid();
-            fcntl(((struct ThreadArgs *)ThreadArgs)->filestream, F_SETLKW, &fl);
-            write(((struct ThreadArgs *)ThreadArgs)->filestream, linebuff, strlen(linebuff));
+            fcntl(threadargs->filestream, F_SETLKW, &fl);
+            write(threadargs->filestream, linebuff, strlen(linebuff));
             fl.l_type = F_UNLCK;
-            fcntl(((struct ThreadArgs *)ThreadArgs)->filestream, F_SETLK, &fl);
+            fcntl(threadargs->filestream, F_SETLK, &fl);
             free(linebuff);
         }
         else {
-            ((struct ThreadArgs *)ThreadArgs)->list->threadcount--;
+            threadargs->list->threadcount--;
         }
     }
-    ((struct ThreadArgs *)ThreadArgs)->list->threadcount--;
-    free(((struct ThreadArgs *)ThreadArgs)->filename);
+    threadargs->list->threadcount--;
     free(((struct ThreadArgs *)ThreadArgs)->filepath);
     free(((struct ThreadArgs *)ThreadArgs)->keyword);
     free((struct ThreadArgs *)ThreadArgs);
@@ -345,10 +359,10 @@ void search_directory(char* directory, DIR *dir, struct dirent *dirent, char* ke
         }
     }
     struct Node *printerNode = create_node();
-    struct ThreadArgs *threadargs = create_thread_args("dummy", "dummy", filestream, keyword, buffer, threadbuffersize, list);
+    struct ThreadArgs *printerthreadargs = create_thread_args("dummy", "dummy", filestream, keyword, buffer, threadbuffersize, list);
     pthread_attr_init(&printerNode->attr);
     pthread_attr_setdetachstate(&printerNode->attr, PTHREAD_CREATE_JOINABLE);
-    pthread_create(&printerNode->tid, &printerNode->attr, print_buffer, (void *) threadargs);
+    pthread_create(&printerNode->tid, &printerNode->attr, print_buffer, (void *) printerthreadargs);
     insert_tail(printerNode, list);
     closedir(dir);
 }
@@ -379,7 +393,11 @@ void handle_client_request(char *request, int buffer_size, int filestream) {
    search_directory(directory_path, dir, dirent, keyword, buffer, threadbuffersize, list, filestream);
 
    while(list->threadcount != 0) {}
-
+   struct Node *threadnode = list->head;
+   for(int i = 0; i < list->overallthreadcount; i++) {
+       pthread_join(threadnode->tid, NULL);
+       threadnode = threadnode->next;
+   }
    destroy_list(list);
    free(buffer);
 }
@@ -494,11 +512,9 @@ void watch_queue(int req_queue_size, int buffersize, int filestream)
     while (pid != 0 && strcmp(request_buffer, "exit") != 0) {
         dequeue(request_buffer, &q);
         process_count++;
-        if((strcmp(request_buffer, "") != 0)){
-            pid = fork();
-        }
+        pid = fork();
     }
-    
+
     if (pid < 0) {
         fprintf(stderr, "server: process fork failed\n");
         exit(1);
